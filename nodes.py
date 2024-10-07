@@ -1,35 +1,37 @@
 import torch
+from collections import OrderedDict
 
 torch.backends.cuda.matmul.allow_tf32 = True
 
-
-class CachingCLIPTextEncode:
+class CLIPTextEncodeWithCache:
 
     RETURN_TYPES = ("CONDITIONING",)
     FUNCTION = "encode"
     CATEGORY = "conditioning"
 
     def __init__(self):
-        self.cache: dict[str, str | torch.Tensor | None] = {
-            "text": None,
-            "cond": None,
-            "pooled_output": None,
-        }
+        self.cache = OrderedDict()
 
     @classmethod
     def INPUT_TYPES(s) -> dict:
         return {
-            "required": {"text": ("STRING", {"multiline": True}), "clip": ("CLIP",)}
+            "required": {
+                "text": ("STRING", {"multiline": True}),
+                "cache_size":("INT", {"default": 20, "min": 1, "max": 100}),
+                "clip": ("CLIP",)}
         }
 
     def encode(
-        self, clip: torch.nn.Module, text: str
+        self, clip: torch.nn.Module, text: str, cache_size:int
     ) -> tuple[list[list[torch.Tensor, dict[str, torch.Tensor]]]]:
-        if text != self.cache["text"]:
+        if text not in self.cache:
             tokens = clip.tokenize(text)
             cond, pooled = clip.encode_from_tokens(tokens, return_pooled=True)
-            return ([[cond, {"pooled_output": pooled}]],)
+            if len(self.cache) >= cache_size:
+                self.cache.popitem(last=False)
+            self.cache[text] = {"cond": cond, "pooled_output": pooled}
         else:
-            return (
-                [[self.cache["cond"], {"pooled_output": self.cache["pooled_output"]}]],
-            )
+            self.cache.move_to_end(text)
+        return (
+            [[self.cache[text]["cond"], {"pooled_output": self.cache[text]["pooled_output"]}]],
+        )
